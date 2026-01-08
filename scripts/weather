@@ -1,0 +1,466 @@
+#!/usr/bin/env ruby
+require_relative "../config/environment"
+
+class WeatherDisplay
+  PREVIEW_PATH = "/tmp/pixoo_weather_preview.png"
+
+  def self.lat
+    ENV.fetch("PIXOO_LAT").to_f
+  end
+
+  def self.lon
+    ENV.fetch("PIXOO_LON").to_f
+  end
+
+  def self.countdown_start
+    ENV["PIXOO_COUNTDOWN_START"]
+  end
+
+  def self.countdown_end
+    ENV["PIXOO_COUNTDOWN_END"]
+  end
+
+  WEATHER_CODES = {
+    0 => "clear",
+    1 => "mostly clear",
+    2 => "partly cloudy",
+    3 => "overcast",
+    45 => "foggy",
+    48 => "foggy",
+    51 => "light drizzle",
+    53 => "drizzle",
+    55 => "heavy drizzle",
+    56 => "freezing drizzle",
+    57 => "freezing drizzle",
+    61 => "light rain",
+    63 => "rain",
+    65 => "heavy rain",
+    66 => "freezing rain",
+    67 => "freezing rain",
+    71 => "light snow",
+    73 => "snow",
+    75 => "heavy snow",
+    77 => "snow grains",
+    80 => "rain showers",
+    81 => "rain showers",
+    82 => "heavy showers",
+    85 => "snow showers",
+    86 => "heavy snow showers",
+    95 => "thunderstorm",
+    96 => "thunderstorm + hail",
+    99 => "severe thunderstorm"
+  }
+
+  def initialize(preview: false)
+    @preview = preview
+    @weather = nil
+    @weather_fetched_at = nil
+    @last_state = {}
+
+    if @preview
+      log "Preview mode: output to #{PREVIEW_PATH}"
+    else
+      @pixoo = Pixoo::Client.find_all.first
+      abort "No Pixoo device found!" unless @pixoo
+      log "Weather display started (#{@pixoo.ip}). Ctrl+C to stop."
+    end
+  end
+
+  def run
+    loop do
+      refresh_weather_if_needed
+      update_display
+      sleep 1
+    rescue => e
+      log "Error: #{e.message}"
+      sleep 5
+    end
+  end
+
+  private
+
+  def log(msg)
+    puts "[#{Time.current.strftime('%H:%M:%S')}] #{msg}"
+  end
+
+  def refresh_weather_if_needed
+    # Refresh weather every 60 seconds
+    if @weather.nil? || @weather_fetched_at.nil? || Time.current - @weather_fetched_at > 60
+      old_weather = @weather
+      @weather = fetch_weather
+      @weather_fetched_at = Time.current
+
+      code_desc = WEATHER_CODES[@weather[:code]] || "unknown"
+      log "Weather: #{@weather[:feels_like]}° feels like, #{@weather[:wind]}mph wind, #{code_desc}"
+
+      if old_weather && old_weather[:feels_like] != @weather[:feels_like]
+        log "  Temperature changed: #{old_weather[:feels_like]}° → #{@weather[:feels_like]}°"
+      end
+    end
+  end
+
+  def fetch_weather
+    uri = URI("https://api.open-meteo.com/v1/forecast")
+    uri.query = URI.encode_www_form(
+      latitude: self.class.lat,
+      longitude: self.class.lon,
+      current: "temperature_2m,apparent_temperature,weather_code,wind_speed_10m,precipitation,snowfall,is_day,relative_humidity_2m",
+      hourly: "precipitation_probability",
+      forecast_hours: 3,
+      temperature_unit: "fahrenheit",
+      wind_speed_unit: "mph",
+      timezone: "America/New_York"
+    )
+
+    response = Net::HTTP.get(uri)
+    data = JSON.parse(response)
+
+    precip_probs = data.dig("hourly", "precipitation_probability") || []
+    max_precip_prob = precip_probs.first(3).max || 0
+
+    {
+      temp: data.dig("current", "temperature_2m")&.round,
+      feels_like: data.dig("current", "apparent_temperature")&.round,
+      code: data.dig("current", "weather_code") || 0,
+      wind: (data.dig("current", "wind_speed_10m") || 0).round,
+      precip: data.dig("current", "precipitation") || 0,
+      snow: data.dig("current", "snowfall") || 0,
+      is_day: data.dig("current", "is_day") == 1,
+      precip_prob: max_precip_prob,
+      humidity: data.dig("current", "relative_humidity_2m")&.round
+    }
+  end
+
+  def update_display
+    img = Pixoo::ImageBuffer.new(64, speed: 100)
+
+    sky, _ = sky_emoji_for(@weather)
+    comfort = comfort_emoji_for(@weather)
+    clothing = clothing_for_temp(@weather[:feels_like])
+    in_countdown = countdown_active?
+
+    # Build current state
+    current_state = {
+      sky: sky,
+      comfort: comfort,
+      clothing: clothing.join,
+      countdown: in_countdown
+    }
+
+    # Log changes
+    if @last_state != current_state
+      changes = []
+      changes << "sky=#{sky}" if @last_state[:sky] != sky
+      changes << "comfort=#{comfort}" if @last_state[:comfort] != comfort
+      changes << "clothing=#{clothing.join}" if @last_state[:clothing] != clothing.join
+      changes << "countdown=#{in_countdown ? 'on' : 'off'}" if @last_state[:countdown] != in_countdown
+
+      if @last_state.empty?
+        log "Display initialized: sky=#{sky} comfort=#{comfort} clothing=#{clothing.join}"
+      else
+        log "Display changed: #{changes.join(', ')}"
+      end
+
+      @last_state = current_state
+    end
+
+    draw_sky_emoji(img)
+    draw_comfort_emoji(img)
+    draw_clothing(img)
+    draw_parent_info(img)
+    draw_countdown_bar(img)
+
+    if @preview
+      save_preview(img)
+    else
+      @pixoo.send_animation([img])
+    end
+  end
+
+  def save_preview(img)
+    png = ChunkyPNG::Image.new(64, 64, ChunkyPNG::Color::BLACK)
+
+    64.times do |y|
+      64.times do |x|
+        r, g, b = img.get_pixel(y, x)
+        png[x, y] = ChunkyPNG::Color.rgb(r, g, b)
+      end
+    end
+
+    png.save(PREVIEW_PATH)
+  end
+
+  def countdown_active?
+    start_time = countdown_start
+    end_time = countdown_end
+    return false unless start_time && end_time
+
+    now = Time.current
+    now >= start_time && now < end_time
+  end
+
+  # --- Weather codes ---
+  SNOW_CODES = [71, 73, 75, 77, 85, 86]
+  RAIN_CODES = [51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82]
+  STORM_CODES = [95, 96, 99]
+  CLOUDY_CODES = [2, 3, 45, 48]
+
+  CLOTHING = {
+    freezing: %w[🧥 🧤 🧣],
+    cold:     %w[🧥 🧣],
+    cool:     %w[🧥],
+    warm:     %w[👕],
+    hot:      %w[👕 🩳 😎]
+  }
+
+  def draw_sky_emoji(img)
+    emoji, show_timer = sky_emoji_for(@weather)
+    draw_emoji(img, emoji, 2, 2, 20)
+    draw_emoji(img, "⏳", 18, 12, 10) if show_timer
+  end
+
+  def sky_emoji_for(weather)
+    code = weather[:code]
+    snow = weather[:snow]
+    precip = weather[:precip]
+    precip_prob = weather[:precip_prob]
+    is_day = weather[:is_day]
+
+    return ["⛈️", false] if STORM_CODES.include?(code)
+    return ["❄️", false] if snow > 0 || SNOW_CODES.include?(code)
+    return ["❄️", true] if precip_prob > 50 && weather[:feels_like] && weather[:feels_like] < 35
+    return ["☔", false] if precip > 0 || RAIN_CODES.include?(code)
+    return ["☔", true] if precip_prob > 50
+    return ["☁️", false] if CLOUDY_CODES.include?(code)
+    is_day ? ["☀️", false] : ["🌙", false]
+  end
+
+  def draw_comfort_emoji(img)
+    emoji = comfort_emoji_for(@weather)
+    draw_emoji(img, emoji, 44, 2, 18)
+  end
+
+  def comfort_emoji_for(weather)
+    wind = weather[:wind]
+    feels = weather[:feels_like] || 50
+    return "🌬️" if wind >= 18 && feels <= 55
+    return "🥶" if feels < 32
+    return "🥵" if feels >= 85
+    "😊"
+  end
+
+  def draw_clothing(img)
+    clothing = clothing_for_temp(@weather[:feels_like])
+    emoji_size = 28
+    spacing = 2
+    total_width = (clothing.length * emoji_size) + ((clothing.length - 1) * spacing)
+    start_x = (64 - total_width) / 2
+    y = 24
+
+    clothing.each_with_index do |emoji, i|
+      x = start_x + (i * (emoji_size + spacing))
+      draw_emoji(img, emoji, x, y, emoji_size)
+    end
+  end
+
+  def clothing_for_temp(feels_like)
+    return CLOTHING[:freezing] if feels_like.nil? || feels_like < 20
+    return CLOTHING[:cold] if feels_like < 40
+    return CLOTHING[:cool] if feels_like < 60
+    return CLOTHING[:warm] if feels_like < 75
+    CLOTHING[:hot]
+  end
+
+  # --- Mini font for parent info ---
+  MINI_FONT = {
+    "0" => [0x6, 0x9, 0x9, 0x9, 0x6],
+    "1" => [0x2, 0x6, 0x2, 0x2, 0x7],
+    "2" => [0x6, 0x1, 0x2, 0x4, 0x7],
+    "3" => [0x6, 0x1, 0x2, 0x1, 0x6],
+    "4" => [0x9, 0x9, 0x7, 0x1, 0x1],
+    "5" => [0x7, 0x4, 0x6, 0x1, 0x6],
+    "6" => [0x6, 0x8, 0xE, 0x9, 0x6],
+    "7" => [0x7, 0x1, 0x2, 0x2, 0x2],
+    "8" => [0x6, 0x9, 0x6, 0x9, 0x6],
+    "9" => [0x6, 0x9, 0x7, 0x1, 0x6],
+    "°" => [0x2, 0x5, 0x2, 0x0, 0x0],
+    " " => [0x0, 0x0, 0x0, 0x0, 0x0],
+    "-" => [0x0, 0x0, 0x7, 0x0, 0x0],
+    ":" => [0x0, 0x4, 0x0, 0x4, 0x0],
+    "m" => [0x0, 0x0, 0xA, 0xF, 0x9],
+    "p" => [0x0, 0xE, 0x9, 0xE, 0x8],
+    "h" => [0x8, 0x8, 0xE, 0x9, 0x9],
+    "a" => [0x0, 0x6, 0x1, 0x7, 0x9],
+    "M" => [0x9, 0xF, 0xF, 0x9, 0x9],
+    "T" => [0x7, 0x2, 0x2, 0x2, 0x2],
+    "W" => [0x9, 0x9, 0xF, 0xF, 0x9],
+    "F" => [0x7, 0x4, 0x6, 0x4, 0x4],
+    "S" => [0x7, 0x4, 0x6, 0x1, 0x6],
+    "u" => [0x0, 0x0, 0x9, 0x9, 0x7],
+    "e" => [0x0, 0x6, 0xF, 0x8, 0x6],
+    "o" => [0x0, 0x0, 0x6, 0x9, 0x6],
+    "r" => [0x0, 0x0, 0xB, 0xC, 0x8],
+    "i" => [0x2, 0x0, 0x2, 0x2, 0x2],
+  }
+
+  def draw_parent_info(img)
+    feels = @weather[:feels_like] || 0
+    time_str = Time.current.strftime("%-I:%M")
+    info = "#{feels}° #{time_str}"
+    draw_mini_text(img, info, 56, [136, 136, 136])
+  end
+
+  def draw_mini_text(img, text, y, color)
+    char_width = 4
+    spacing = 1
+    total_width = text.length * (char_width + spacing) - spacing
+    x = (64 - total_width) / 2
+
+    text.each_char do |char|
+      draw_mini_char(img, char, x, y, color)
+      x += char_width + spacing
+    end
+  end
+
+  def draw_mini_char(img, char, x, y, color)
+    bitmap = MINI_FONT[char]
+    return unless bitmap
+
+    bitmap.each_with_index do |row_bits, row|
+      4.times do |col|
+        if (row_bits >> (3 - col)) & 1 == 1
+          px, py = x + col, y + row
+          img.set_pixel(py, px, *color) if px >= 0 && px < 64 && py >= 0 && py < 64
+        end
+      end
+    end
+  end
+
+  # --- Countdown bar ---
+  def countdown_start
+    val = self.class.countdown_start
+    val ? Time.zone.parse(val) : nil
+  end
+
+  def countdown_end
+    val = self.class.countdown_end
+    val ? Time.zone.parse(val) : nil
+  end
+
+  def draw_countdown_bar(img)
+    start_time = countdown_start
+    end_time = countdown_end
+
+    # Skip if countdown not configured
+    return unless start_time && end_time
+
+    now = Time.current
+
+    # Only show during countdown window
+    return if now < start_time || now >= end_time
+
+    total_duration = end_time - start_time
+    remaining = [end_time - now, 0].max
+    fill_pct = total_duration > 0 ? (remaining / total_duration) : 0
+
+    bar_y = 62
+    bar_height = 2
+    bar_width = 60
+    bar_x = 2
+
+    # Background
+    bar_width.times do |dx|
+      bar_height.times do |dy|
+        img.set_pixel(bar_y + dy, bar_x + dx, 40, 40, 40)
+      end
+    end
+
+    # Filled portion (anchored right, shrinks from left)
+    fill_width = (bar_width * fill_pct).round
+    start_x = bar_x + (bar_width - fill_width)
+
+    # Color: green (120°) → red (0°)
+    hue = 120 * fill_pct
+    r, g, b = hsv_to_rgb(hue, 1.0, 1.0)
+
+    fill_width.times do |dx|
+      bar_height.times do |dy|
+        img.set_pixel(bar_y + dy, start_x + dx, r, g, b)
+      end
+    end
+  end
+
+  def hsv_to_rgb(h, s, v)
+    c = v * s
+    x = c * (1 - ((h / 60.0) % 2 - 1).abs)
+    m = v - c
+
+    r, g, b = case (h / 60).floor % 6
+    when 0 then [c, x, 0]
+    when 1 then [x, c, 0]
+    when 2 then [0, c, x]
+    when 3 then [0, x, c]
+    when 4 then [x, 0, c]
+    when 5 then [c, 0, x]
+    end
+
+    [(r + m) * 255, (g + m) * 255, (b + m) * 255].map(&:round)
+  end
+
+  # --- Emoji rendering ---
+  def draw_emoji(img, emoji, x, y, size)
+    codepoints = emoji.codepoints.reject { |cp| cp == 0xFE0F }.map { |cp| cp.to_s(16) }.join("-")
+    cache_path = "/tmp/pixoo_twemoji_#{codepoints}_#{size}.png"
+
+    unless File.exist?(cache_path)
+      url = "https://cdn.jsdelivr.net/gh/twitter/twemoji@latest/assets/72x72/#{codepoints}.png"
+      original_path = "/tmp/pixoo_twemoji_#{codepoints}_original.png"
+
+      unless File.exist?(original_path)
+        uri = URI(url)
+        response = Net::HTTP.get_response(uri)
+        if response.is_a?(Net::HTTPSuccess)
+          File.binwrite(original_path, response.body)
+        else
+          puts "Failed to download emoji: #{emoji}"
+          return
+        end
+      end
+
+      image = MiniMagick::Image.open(original_path)
+      image.resize "#{size}x#{size}"
+      image.write cache_path
+    end
+
+    copy_png_to_buffer(img, cache_path, x, y)
+  end
+
+  def copy_png_to_buffer(img, png_path, offset_x, offset_y)
+    return unless File.exist?(png_path)
+
+    png = ChunkyPNG::Image.from_file(png_path)
+
+    png.height.times do |dy|
+      png.width.times do |dx|
+        px = offset_x + dx
+        py = offset_y + dy
+
+        next unless px >= 0 && px < 64 && py >= 0 && py < 64
+
+        pixel = png[dx, dy]
+        a = ChunkyPNG::Color.a(pixel)
+        next if a < 128
+
+        r = ChunkyPNG::Color.r(pixel)
+        g = ChunkyPNG::Color.g(pixel)
+        b = ChunkyPNG::Color.b(pixel)
+
+        img.set_pixel(py, px, r, g, b)
+      end
+    end
+  end
+end
+
+# Run it
+preview_mode = ARGV.include?("--preview")
+WeatherDisplay.new(preview: preview_mode).run
