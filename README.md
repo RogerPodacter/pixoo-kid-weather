@@ -1,5 +1,7 @@
 # pixoo-kid-weather
 
+<img width="250" src="https://github.com/user-attachments/assets/14f330a8-2ad9-4754-933c-6619d9959c7e" />
+
 Kid-friendly weather + "what to wear" dashboard for a [Divoom Pixoo 64](https://divoom.com/products/pixoo-64). It shows simple icons (sky + comfort), big clothing emojis, and an optional morning countdown bar.
 
 You'll need a Pixoo 64 on your local network. Just plug it in and run the script—device detection is automatic.
