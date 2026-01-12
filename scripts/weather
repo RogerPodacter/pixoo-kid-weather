@@ -258,7 +258,7 @@ class WeatherDisplay
     wind = weather[:wind]
     feels = weather[:feels_like] || 50
     return "🌬️" if wind >= 18 && feels <= 55
-    return "🥶" if feels < 32
+    return "🙂" if feels < 50
     return "🥵" if feels >= 85
     "😊"
   end
