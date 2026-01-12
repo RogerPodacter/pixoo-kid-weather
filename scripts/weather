@@ -149,7 +149,7 @@ class WeatherDisplay
     img = Pixoo::ImageBuffer.new(64, speed: 100)
 
     sky, _ = sky_emoji_for(@weather)
-    comfort = comfort_emoji_for(@weather)
+    comfort, _ = comfort_emoji_for(@weather)
     clothing = clothing_for_temp(@weather[:feels_like])
     in_countdown = countdown_active?
 
@@ -250,17 +250,17 @@ class WeatherDisplay
   end
 
   def draw_comfort_emoji(img)
-    emoji = comfort_emoji_for(@weather)
-    draw_emoji(img, emoji, 44, 2, 18)
+    emoji, tint = comfort_emoji_for(@weather)
+    draw_emoji(img, emoji, 44, 2, 18, tint: tint)
   end
 
   def comfort_emoji_for(weather)
     wind = weather[:wind]
     feels = weather[:feels_like] || 50
-    return "🌬️" if wind >= 18 && feels <= 55
-    return "🙂" if feels < 50
-    return "🥵" if feels >= 85
-    "😊"
+    return ["🌬️", nil] if wind >= 18 && feels <= 55
+    return ["🙂", :blue] if feels < 50
+    return ["🥵", nil] if feels >= 85
+    ["😊", nil]
   end
 
   def draw_clothing(img)
@@ -422,7 +422,7 @@ class WeatherDisplay
   end
 
   # --- Emoji rendering ---
-  def draw_emoji(img, emoji, x, y, size)
+  def draw_emoji(img, emoji, x, y, size, tint: nil)
     codepoints = emoji.codepoints.reject { |cp| cp == 0xFE0F }.map { |cp| cp.to_s(16) }.join("-")
     cache_path = "/tmp/pixoo_twemoji_#{codepoints}_#{size}.png"
 
@@ -446,10 +446,10 @@ class WeatherDisplay
       image.write cache_path
     end
 
-    copy_png_to_buffer(img, cache_path, x, y)
+    copy_png_to_buffer(img, cache_path, x, y, tint: tint)
   end
 
-  def copy_png_to_buffer(img, png_path, offset_x, offset_y)
+  def copy_png_to_buffer(img, png_path, offset_x, offset_y, tint: nil)
     return unless File.exist?(png_path)
 
     png = ChunkyPNG::Image.from_file(png_path)
@@ -468,6 +468,13 @@ class WeatherDisplay
         r = ChunkyPNG::Color.r(pixel)
         g = ChunkyPNG::Color.g(pixel)
         b = ChunkyPNG::Color.b(pixel)
+
+        # Apply blue tint for cold weather
+        if tint == :blue
+          r = (r * 0.7).round
+          g = (g * 0.85).round
+          b = [b + 40, 255].min
+        end
 
         img.set_pixel(py, px, r, g, b)
       end
