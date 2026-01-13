@@ -27,7 +27,7 @@ class WeatherDisplay
 
   def self.geocode_location(location)
     uri = URI("https://geocoding-api.open-meteo.com/v1/search")
-    uri.query = URI.encode_www_form(name: location, count: 1)
+    uri.query = URI.encode_www_form(name: location, count: 5)
 
     response = Net::HTTP.get(uri)
     data = JSON.parse(response)
@@ -35,6 +35,21 @@ class WeatherDisplay
     results = data["results"]
     if results.nil? || results.empty?
       abort "Error: Could not find location '#{location}'. Try a more specific name (e.g., 'Brooklyn, NY, USA')"
+    end
+
+    # Check for ambiguity - are there multiple distinct places?
+    if results.length > 1
+      first = results.first
+      ambiguous = results[1..].any? do |r|
+        r["admin1"] != first["admin1"] || r["country"] != first["country"]
+      end
+
+      if ambiguous
+        suggestions = results.first(5).map do |r|
+          "  - #{[r['name'], r['admin1'], r['country']].compact.join(', ')}"
+        end
+        abort "Error: '#{location}' is ambiguous. Did you mean:\n#{suggestions.join("\n")}"
+      end
     end
 
     result = results.first
