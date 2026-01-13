@@ -44,7 +44,7 @@ You'll need a Pixoo 64 on your local network. Just plug it in and run the script
 ```bash
 brew install imagemagick # macOS (MiniMagick depends on it)
 bundle install
-cp .env.example .env     # then edit with your lat/lon
+cp .env.example .env     # then edit with your location
 ```
 
 ## Running
@@ -64,15 +64,14 @@ open /tmp/pixoo_weather_preview.png  # macOS
 
 ## Configuration
 
-Set these environment variables:
+Set these environment variables in `.env`:
 
 **Required:**
-- `PIXOO_LAT` - Latitude (right-click in Google Maps → copy)
-- `PIXOO_LON` - Longitude
+- `LOCATION` - City name or address (e.g., `Brooklyn, NY` or `123 Main St, Seattle, WA`). Uses OpenStreetMap to find coordinates. If ambiguous or not found, the app exits with suggestions.
 
 **Optional (enables countdown bar):**
-- `PIXOO_COUNTDOWN_START` - When countdown starts (e.g., `8:00am`)
-- `PIXOO_COUNTDOWN_END` - When countdown ends (e.g., `8:20am`)
+- `COUNTDOWN_START` - When countdown starts (e.g., `8:00am`)
+- `COUNTDOWN_END` - When countdown ends (e.g., `8:20am`)
 
 ## Notes
 
@@ -84,5 +83,6 @@ Set these environment variables:
 - Ruby 3.4.4
 - [pixoo](https://github.com/tenderlove/pixoo-rb) gem for device communication
 - [Open-Meteo API](https://open-meteo.com/) for weather (no API key needed)
+- [Nominatim/OpenStreetMap](https://nominatim.org/) for geocoding (no API key needed)
 - ImageMagick for emoji resizing
 - dotenv-rails for loading `.env` config

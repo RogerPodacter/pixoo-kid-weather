@@ -4,20 +4,87 @@ require_relative "../config/environment"
 class WeatherDisplay
   PREVIEW_PATH = "/tmp/pixoo_weather_preview.png"
 
+  @cached_coords = nil
+
   def self.lat
-    ENV.fetch("PIXOO_LAT").to_f
+    coords[:lat]
   end
 
   def self.lon
-    ENV.fetch("PIXOO_LON").to_f
+    coords[:lon]
+  end
+
+  def self.coords
+    return @cached_coords if @cached_coords
+
+    location = ENV["LOCATION"]
+    unless location
+      abort "Error: Set LOCATION in your .env file (e.g., 'Brooklyn, NY')"
+    end
+
+    @cached_coords = geocode_location(location)
+  end
+
+  def self.geocode_location(location)
+    uri = URI("https://nominatim.openstreetmap.org/search")
+    uri.query = URI.encode_www_form(q: location, format: "json", limit: 5)
+
+    http = Net::HTTP.new(uri.host, uri.port)
+    http.use_ssl = true
+    http.open_timeout = 5
+    http.read_timeout = 10
+    request = Net::HTTP::Get.new(uri)
+    request["User-Agent"] = "pixoo-weather (https://github.com/RogerPodacter/pixoo-kid-weather)"
+
+    response = http.request(request)
+    unless response.is_a?(Net::HTTPSuccess)
+      abort "Error: Geocoding failed (HTTP #{response.code}). Try again later."
+    end
+    results = JSON.parse(response.body)
+
+    if results.empty?
+      abort "Error: Could not find location '#{location}'. Try a more specific name (e.g., 'Brooklyn, NY, USA')"
+    end
+
+    # Check for ambiguity - is there another high-importance result far away?
+    if results.length > 1
+      first = results.first
+      first_importance = first["importance"] || 0
+
+      # Only consider results with importance within 50% of the top result
+      significant_results = results.select { |r| (r["importance"] || 0) > first_importance * 0.5 }
+
+      ambiguous = significant_results[1..].any? do |r|
+        distance_km(first["lat"].to_f, first["lon"].to_f, r["lat"].to_f, r["lon"].to_f) > 50
+      end
+
+      if ambiguous
+        suggestions = significant_results.first(5).map { |r| "  - #{r['display_name']}" }
+        abort "Error: '#{location}' is ambiguous. Did you mean:\n#{suggestions.join("\n")}"
+      end
+    end
+
+    result = results.first
+    puts "[Geocoding] Found: #{result['display_name']}"
+
+    { lat: result["lat"].to_f, lon: result["lon"].to_f }
+  end
+
+  def self.distance_km(lat1, lon1, lat2, lon2)
+    # Haversine formula for distance between two coordinates
+    r = 6371 # Earth's radius in km
+    dlat = (lat2 - lat1) * Math::PI / 180
+    dlon = (lon2 - lon1) * Math::PI / 180
+    a = Math.sin(dlat / 2)**2 + Math.cos(lat1 * Math::PI / 180) * Math.cos(lat2 * Math::PI / 180) * Math.sin(dlon / 2)**2
+    2 * r * Math.asin(Math.sqrt(a))
   end
 
   def self.countdown_start
-    ENV["PIXOO_COUNTDOWN_START"]
+    ENV["COUNTDOWN_START"]
   end
 
   def self.countdown_end
-    ENV["PIXOO_COUNTDOWN_END"]
+    ENV["COUNTDOWN_END"]
   end
 
   WEATHER_CODES = {
@@ -90,6 +157,11 @@ class WeatherDisplay
       @weather = fetch_weather
       @weather_fetched_at = Time.current
 
+      if old_weather.nil? && @weather[:timezone]
+        Time.zone = @weather[:timezone]
+        log "Timezone: #{@weather[:timezone]}"
+      end
+
       code_desc = WEATHER_CODES[@weather[:code]] || "unknown"
       log "Weather: #{@weather[:feels_like]}° feels like, #{@weather[:wind]}mph wind, #{code_desc}"
 
@@ -109,7 +181,7 @@ class WeatherDisplay
       forecast_hours: 3,
       temperature_unit: "fahrenheit",
       wind_speed_unit: "mph",
-      timezone: "America/New_York"
+      timezone: "auto"
     )
 
     response = Net::HTTP.get(uri)
@@ -127,7 +199,8 @@ class WeatherDisplay
       snow: data.dig("current", "snowfall") || 0,
       is_day: data.dig("current", "is_day") == 1,
       precip_prob: max_precip_prob,
-      humidity: data.dig("current", "relative_humidity_2m")&.round
+      humidity: data.dig("current", "relative_humidity_2m")&.round,
+      timezone: data["timezone"]
     }
   end
 
