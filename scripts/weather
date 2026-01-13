@@ -4,12 +4,51 @@ require_relative "../config/environment"
 class WeatherDisplay
   PREVIEW_PATH = "/tmp/pixoo_weather_preview.png"
 
+  @cached_coords = nil
+
   def self.lat
-    ENV.fetch("PIXOO_LAT").to_f
+    coords[:lat]
   end
 
   def self.lon
-    ENV.fetch("PIXOO_LON").to_f
+    coords[:lon]
+  end
+
+  def self.coords
+    return @cached_coords if @cached_coords
+
+    # Prefer explicit lat/lon if both are set
+    if ENV["PIXOO_LAT"] && ENV["PIXOO_LON"]
+      @cached_coords = { lat: ENV["PIXOO_LAT"].to_f, lon: ENV["PIXOO_LON"].to_f }
+      return @cached_coords
+    end
+
+    # Otherwise, geocode the location string
+    location = ENV["PIXOO_LOCATION"]
+    unless location
+      abort "Error: Set PIXOO_LOCATION (e.g., 'Brooklyn, NY') or both PIXOO_LAT and PIXOO_LON in your .env file"
+    end
+
+    @cached_coords = geocode_location(location)
+  end
+
+  def self.geocode_location(location)
+    uri = URI("https://geocoding-api.open-meteo.com/v1/search")
+    uri.query = URI.encode_www_form(name: location, count: 1)
+
+    response = Net::HTTP.get(uri)
+    data = JSON.parse(response)
+
+    results = data["results"]
+    if results.nil? || results.empty?
+      abort "Error: Could not find location '#{location}'. Try a more specific name (e.g., 'Brooklyn, NY, USA')"
+    end
+
+    result = results.first
+    puts "[Geocoding] Found: #{result['name']}, #{result['admin1']}, #{result['country']} " \
+         "(#{result['latitude']}, #{result['longitude']})"
+
+    { lat: result["latitude"], lon: result["longitude"] }
   end
 
   def self.countdown_start
