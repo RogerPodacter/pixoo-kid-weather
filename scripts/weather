@@ -17,16 +17,9 @@ class WeatherDisplay
   def self.coords
     return @cached_coords if @cached_coords
 
-    # Prefer explicit lat/lon if both are set
-    if ENV["PIXOO_LAT"] && ENV["PIXOO_LON"]
-      @cached_coords = { lat: ENV["PIXOO_LAT"].to_f, lon: ENV["PIXOO_LON"].to_f }
-      return @cached_coords
-    end
-
-    # Otherwise, geocode the location string
     location = ENV["PIXOO_LOCATION"]
     unless location
-      abort "Error: Set PIXOO_LOCATION (e.g., 'Brooklyn, NY') or both PIXOO_LAT and PIXOO_LON in your .env file"
+      abort "Error: Set PIXOO_LOCATION in your .env file (e.g., 'Brooklyn, NY')"
     end
 
     @cached_coords = geocode_location(location)

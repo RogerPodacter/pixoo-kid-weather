@@ -66,15 +66,12 @@ open /tmp/pixoo_weather_preview.png  # macOS
 
 Set these environment variables in `.env`:
 
-**Location (one of these is required):**
-- `PIXOO_LOCATION` - City name or address (e.g., `Brooklyn, NY` or `123 Main St, Seattle, WA`). Uses Open-Meteo geocoding to find coordinates.
-- `PIXOO_LAT` + `PIXOO_LON` - Explicit coordinates (overrides `PIXOO_LOCATION` if both are set)
+**Required:**
+- `PIXOO_LOCATION` - City name or address (e.g., `Brooklyn, NY` or `123 Main St, Seattle, WA`). Uses Open-Meteo geocoding to find coordinates. If not found, the app exits with an error.
 
 **Optional (enables countdown bar):**
 - `PIXOO_COUNTDOWN_START` - When countdown starts (e.g., `8:00am`)
 - `PIXOO_COUNTDOWN_END` - When countdown ends (e.g., `8:20am`)
-
-If geocoding fails (location not found), the app will exit with an error suggesting you try a more specific name.
 
 ## Notes
 
