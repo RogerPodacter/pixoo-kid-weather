@@ -49,7 +49,31 @@ cp .env.example .env     # then edit with your location
 
 ## Running
 
-Continuous mode (updates every second, fetches weather every 60s):
+### With Auto-Update (Recommended)
+
+Use the start script for automatic updates from GitHub:
+
+```bash
+scripts/start
+```
+
+This will:
+1. Check GitHub for new commits on startup
+2. Pull and apply updates automatically
+3. Run the weather display
+4. Restart with update check if the process exits
+
+Options:
+- `scripts/start --once` - Run once without restart loop
+- `scripts/start --preview` - Preview mode (no Pixoo device needed)
+
+Environment variables:
+- `AUTO_UPDATE=false` - Disable update checking
+- `RESTART_DELAY=5` - Seconds to wait before restart (default: 5)
+
+### Manual Mode
+
+Run the weather script directly (no auto-update):
 
 ```bash
 scripts/weather
@@ -60,6 +84,36 @@ Preview mode (renders to PNG for testing without device):
 ```bash
 scripts/weather --preview
 open /tmp/pixoo_weather_preview.png  # macOS
+```
+
+### Running as a Service
+
+For always-on operation (e.g., Raspberry Pi), create a systemd service:
+
+```bash
+# /etc/systemd/system/pixoo-weather.service
+[Unit]
+Description=Pixoo Weather Display
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/pixoo-kid-weather
+ExecStart=/home/pi/pixoo-kid-weather/scripts/start
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Then enable it:
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable pixoo-weather
+sudo systemctl start pixoo-weather
 ```
 
 ## Configuration

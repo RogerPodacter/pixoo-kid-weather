@@ -1,0 +1,102 @@
+#!/usr/bin/env ruby
+# Start script with auto-update support for pixoo-kid-weather
+#
+# This wrapper script:
+# 1. Checks for updates from GitHub on startup
+# 2. Pulls new code if available
+# 3. Runs the weather display
+# 4. Restarts automatically (with update check) when the process exits
+#
+# Usage:
+#   scripts/start              # Run with auto-update, restarts on exit
+#   scripts/start --once       # Run once without restart loop
+#   scripts/start --preview    # Preview mode (passed to weather script)
+#
+# Environment variables:
+#   AUTO_UPDATE=false          # Disable auto-update check
+#   RESTART_DELAY=5            # Seconds to wait before restart (default: 5)
+
+APP_ROOT = File.expand_path("..", __dir__)
+Dir.chdir(APP_ROOT)
+
+class WeatherStarter
+  def initialize(args)
+    @args = args
+    @once_mode = args.include?("--once")
+    @preview_mode = args.include?("--preview")
+    @auto_update = ENV.fetch("AUTO_UPDATE", "true").downcase != "false"
+    @restart_delay = ENV.fetch("RESTART_DELAY", "5").to_i
+    @running = true
+
+    setup_signal_handlers
+  end
+
+  def run
+    loop do
+      check_for_updates if @auto_update
+      run_weather_display
+
+      break if @once_mode || !@running
+
+      log "Weather display exited. Restarting in #{@restart_delay}s... (Ctrl+C to stop)"
+      sleep @restart_delay
+    end
+
+    log "Goodbye!"
+  end
+
+  private
+
+  def log(msg)
+    puts "[Start] #{msg}"
+  end
+
+  def setup_signal_handlers
+    # Handle Ctrl+C gracefully
+    Signal.trap("INT") do
+      puts "\n"
+      log "Shutting down..."
+      @running = false
+    end
+
+    # Handle SIGUSR1 to trigger restart (for manual update trigger)
+    Signal.trap("USR1") do
+      log "Received USR1, will restart after current cycle"
+      Process.kill("INT", @weather_pid) if @weather_pid
+    end
+  end
+
+  def check_for_updates
+    log "Checking for updates..."
+
+    # Run the auto-update script
+    system("#{APP_ROOT}/scripts/auto-update")
+
+    if $?.exitstatus == 0
+      log "Updates applied! Starting with new code..."
+
+      # Re-exec ourselves to pick up any changes to this script
+      exec($0, *@args)
+    end
+  end
+
+  def run_weather_display
+    weather_args = []
+    weather_args << "--preview" if @preview_mode
+
+    log "Starting weather display..."
+
+    @weather_pid = spawn("#{APP_ROOT}/scripts/weather", *weather_args)
+    Process.wait(@weather_pid)
+    @weather_pid = nil
+  rescue Errno::ENOENT
+    log "Error: scripts/weather not found!"
+    sleep 5
+  rescue Interrupt
+    # Ctrl+C was pressed, handled by signal handler
+  end
+end
+
+if __FILE__ == $0
+  WeatherStarter.new(ARGV).run
+end
