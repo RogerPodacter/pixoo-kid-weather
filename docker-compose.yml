@@ -7,8 +7,6 @@ services:
       - .env
     volumes:
       - .:/app
-    command: >
-      sh -c "git pull --ff-only || true && bundle check || bundle install && ./scripts/weather"
 
   bedroom:
     build: .
@@ -18,5 +16,4 @@ services:
       - .env
     volumes:
       - .:/app
-    command: >
-      sh -c "git pull --ff-only || true && bundle check || bundle install && ./scripts/bedroom"
+    command: ["./scripts/bedroom"]

@@ -12,4 +12,5 @@ RUN bundle install
 
 COPY . .
 
+ENTRYPOINT ["./scripts/docker-entrypoint"]
 CMD ["./scripts/weather"]

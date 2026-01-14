@@ -1,0 +1,11 @@
+#!/bin/sh
+set -e
+
+echo "[entrypoint] Checking for updates..."
+git pull --ff-only || echo "[entrypoint] Pull failed, continuing with current version"
+
+echo "[entrypoint] Checking dependencies..."
+bundle check || bundle install
+
+echo "[entrypoint] Starting $@"
+exec "$@"
