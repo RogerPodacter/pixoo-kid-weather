@@ -2,40 +2,21 @@ services:
   weather:
     build: .
     restart: always
-    network_mode: host  # Required for Pixoo device discovery
+    network_mode: host
     env_file:
       - .env
+    volumes:
+      - .:/app
+    command: >
+      sh -c "git pull --ff-only || true && bundle check || bundle install && ./scripts/weather"
 
   bedroom:
     build: .
-    command: ./scripts/bedroom
     restart: always
     network_mode: host
     env_file:
       - .env
-
-  updater:
-    image: alpine/git
-    restart: always
-    working_dir: /repo
     volumes:
-      - .:/repo
-      - /var/run/docker.sock:/var/run/docker.sock
-    entrypoint: /bin/sh
-    command:
-      - -c
-      - |
-        apk add --no-cache docker-cli docker-cli-compose
-        while true; do
-          sleep 3600  # Check every hour
-          echo "[updater] Checking for updates..."
-          git fetch origin
-          if [ "$$(git rev-parse HEAD)" != "$$(git rev-parse @{u})" ]; then
-            echo "[updater] Updates found, pulling..."
-            git pull --ff-only
-            echo "[updater] Rebuilding containers..."
-            docker compose up --build -d weather bedroom
-          else
-            echo "[updater] Already up to date"
-          fi
-        done
+      - .:/app
+    command: >
+      sh -c "git pull --ff-only || true && bundle check || bundle install && ./scripts/bedroom"

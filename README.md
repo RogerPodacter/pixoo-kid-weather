@@ -40,15 +40,17 @@ docker compose up -d
 That's it. Docker handles:
 - **Auto-start on boot** (via `restart: always`)
 - **Auto-restart on crash**
-- **Hourly update checks** (updater container pulls from GitHub and rebuilds)
+- **Updates on startup** (pulls from GitHub when containers start)
+
+To deploy changes: push to GitHub, then reboot the Pi (or `docker compose restart`).
 
 ### Commands
 
 ```bash
-docker compose logs -f           # view logs
-docker compose logs -f updater   # view update logs
-docker compose down              # stop everything
-docker compose up -d             # start everything
+docker compose logs -f       # view logs
+docker compose restart       # restart (and pull updates)
+docker compose down          # stop everything
+docker compose up -d         # start everything
 ```
 
 ---
