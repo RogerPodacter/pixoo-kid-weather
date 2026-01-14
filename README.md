@@ -29,39 +29,26 @@ Use the device name (as set in the Divoom app) to target specific devices.
 
 ## Docker on Raspberry Pi
 
-### First-time setup
-
 ```bash
-# Clone and configure
-cd /home/pi
 git clone https://github.com/RogerPodacter/pixoo-kid-weather
 cd pixoo-kid-weather
 cp .env.example .env
 nano .env  # edit with your location and device names
-
-# Install systemd service (starts on boot)
-sudo cp pixoo-weather.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable pixoo-weather
-sudo systemctl start pixoo-weather
+docker compose up -d
 ```
 
-### Auto-updates (optional)
-
-```bash
-crontab -e
-```
-Add:
-```
-0 * * * * cd /home/pi/pixoo-kid-weather && ./scripts/update
-```
+That's it. Docker handles:
+- **Auto-start on boot** (via `restart: always`)
+- **Auto-restart on crash**
+- **Hourly update checks** (updater container pulls from GitHub and rebuilds)
 
 ### Commands
 
 ```bash
-sudo systemctl status pixoo-weather   # check status
-docker compose logs -f                 # view logs
-scripts/update                         # pull updates and restart
+docker compose logs -f           # view logs
+docker compose logs -f updater   # view update logs
+docker compose down              # stop everything
+docker compose up -d             # start everything
 ```
 
 ---
