@@ -1,6 +1,7 @@
 #!/usr/bin/env ruby
 require_relative "../config/environment"
 require_relative "../lib/pixoo_device"
+require_relative "../lib/location"
 
 class BedroomDisplay
   PREVIEW_PATH = "/tmp/pixoo_bedroom_preview.png"
@@ -24,20 +25,11 @@ class BedroomDisplay
   end
 
   def self.resolve_device
-    name = ENV["BEDROOM_DEVICE"]&.strip
-
-    if name.nil? || name.empty?
-      devices = PixooDevice.discover
-      abort "No Pixoo devices found on network!" if devices.empty?
-      return devices.first if devices.length == 1
-      abort "Error: BEDROOM_DEVICE not set (multiple devices found)\n" \
-            "Run `scripts/bedroom --list` to see devices\n\n" \
-            "Available:\n#{PixooDevice.format_device_list(devices)}"
-    end
-
-    PixooDevice.find_by_name(name)
+    PixooDevice.resolve(ENV.fetch("BEDROOM_DEVICE", nil))
   rescue PixooDevice::NoneOnNetwork, PixooDevice::NotFound => e
     abort e.message
+  rescue PixooDevice::AmbiguousDevice => e
+    abort "BEDROOM_DEVICE not set.\n#{e.message}\nRun `scripts/bedroom --list` to see devices."
   end
 
   # For testing: override current time
@@ -49,6 +41,9 @@ class BedroomDisplay
     @preview = preview
     @frame = 0
     @stars = generate_stars(40)
+
+    # Set timezone from location (required for correct time parsing)
+    Location.setup_timezone!
 
     if @preview
       log "Preview mode: output to #{PREVIEW_PATH}"
@@ -700,6 +695,8 @@ class BedroomDisplay
   end
 
   def self.save_gif(pngs, delay: 10)
+    PixooDevice.require_imagemagick!
+
     tmp_dir = "/tmp/pixoo_bedroom_frames"
     FileUtils.mkdir_p(tmp_dir)
     FileUtils.rm_f(Dir.glob("#{tmp_dir}/*.png"))
@@ -708,8 +705,7 @@ class BedroomDisplay
       png.save("#{tmp_dir}/frame_#{i.to_s.rjust(3, '0')}.png")
     end
 
-    # Use magick (IMv7) or convert (IMv6)
-    magick_cmd = system("which magick > /dev/null 2>&1") ? "magick" : "convert"
+    magick_cmd = PixooDevice.imagemagick_command
     system("#{magick_cmd} -delay #{delay} -loop 0 #{tmp_dir}/frame_*.png -scale 256x256 #{GIF_PATH}")
   end
 end

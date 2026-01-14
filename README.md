@@ -144,6 +144,7 @@ scripts/bedroom --demo
 
 | Variable | Description |
 |----------|-------------|
+| `LOCATION` | **Required.** City name or address (used for timezone) |
 | `BEDROOM_DEVICE` | Device name (optional if only one device) |
 | `BEDROOM_SUNSET` | When sunset starts (default: `7:30pm`) |
 | `BEDROOM_NIGHT` | When fully night (default: `8:00pm`) |

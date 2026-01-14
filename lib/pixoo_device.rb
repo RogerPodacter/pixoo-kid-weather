@@ -2,6 +2,7 @@
 module PixooDevice
   class NotFound < StandardError; end
   class NoneOnNetwork < StandardError; end
+  class AmbiguousDevice < StandardError; end
 
   # Get device name (handles gem versions with/without accessor)
   def self.device_name(device)
@@ -23,6 +24,23 @@ module PixooDevice
     return match if match
 
     raise NotFound, "No device named \"#{name}\"\n\nAvailable:\n#{format_device_list(devices)}"
+  end
+
+  # Resolve device by name. Auto-selects if only one device on network.
+  # name: device name (can be nil to auto-select)
+  # Returns device, or raises NoneOnNetwork/AmbiguousDevice/NotFound
+  def self.resolve(name)
+    name = name&.strip
+    name = nil if name&.empty?
+
+    if name.nil?
+      devices = discover
+      raise NoneOnNetwork, "No Pixoo devices found on network!" if devices.empty?
+      return devices.first if devices.length == 1
+      raise AmbiguousDevice, "Multiple devices found:\n#{format_device_list(devices)}"
+    end
+
+    find_by_name(name)
   end
 
   # Format device list for display
@@ -50,5 +68,20 @@ module PixooDevice
     puts "  WEATHER_DEVICE=\"Kitchen\""
     puts "  BEDROOM_DEVICE=\"Kids Room\""
     puts "\nDevice names are set in the Divoom app."
+  end
+
+  # Ensure ImageMagick is installed (required for GIF generation)
+  def self.require_imagemagick!
+    has_magick = system("which magick > /dev/null 2>&1")
+    has_convert = system("which convert > /dev/null 2>&1")
+
+    unless has_magick || has_convert
+      abort "Error: ImageMagick not found.\n\nInstall with: brew install imagemagick"
+    end
+  end
+
+  # Get ImageMagick command (magick for v7, convert for v6)
+  def self.imagemagick_command
+    system("which magick > /dev/null 2>&1") ? "magick" : "convert"
   end
 end
