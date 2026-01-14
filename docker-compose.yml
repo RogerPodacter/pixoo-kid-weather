@@ -1,0 +1,7 @@
+services:
+  weather:
+    build: .
+    restart: always
+    network_mode: host  # Required for Pixoo device discovery
+    env_file:
+      - .env

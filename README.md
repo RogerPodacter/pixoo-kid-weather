@@ -39,81 +39,40 @@ You'll need a Pixoo 64 on your local network. Just plug it in and run the script
 | 60-75°F    | 👕 |
 | > 75°F     | 👕 🩳 😎 |
 
-## Setup
+## Running with Docker (Recommended)
 
 ```bash
-brew install imagemagick # macOS (MiniMagick depends on it)
-bundle install
 cp .env.example .env     # then edit with your location
+docker compose up -d
 ```
 
-## Running
+That's it. Docker handles auto-restart on crash/reboot.
 
-### With Auto-Update (Recommended)
-
-Use the start script for automatic updates from GitHub:
-
+**To update:**
 ```bash
-scripts/start
+scripts/update
 ```
 
-This will:
-1. Check GitHub for new commits on startup
-2. Pull and apply updates automatically
-3. Run the weather display
-4. Restart with update check if the process exits
+Or manually: `git pull && docker compose up --build -d`
 
-Options:
-- `scripts/start --once` - Run once without restart loop
-- `scripts/start --preview` - Preview mode (no Pixoo device needed)
+**To check logs:**
+```bash
+docker compose logs -f
+```
 
-Environment variables:
-- `AUTO_UPDATE=false` - Disable update checking
-- `RESTART_DELAY=5` - Seconds to wait before restart (default: 5)
-
-### Manual Mode
-
-Run the weather script directly (no auto-update):
+## Running Locally (without Docker)
 
 ```bash
+brew install imagemagick  # macOS
+bundle install
+cp .env.example .env
 scripts/weather
 ```
 
-Preview mode (renders to PNG for testing without device):
-
+Preview mode (no device needed):
 ```bash
 scripts/weather --preview
-open /tmp/pixoo_weather_preview.png  # macOS
-```
-
-### Running as a Service
-
-For always-on operation (e.g., Raspberry Pi), create a systemd service:
-
-```bash
-# /etc/systemd/system/pixoo-weather.service
-[Unit]
-Description=Pixoo Weather Display
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=pi
-WorkingDirectory=/home/pi/pixoo-kid-weather
-ExecStart=/home/pi/pixoo-kid-weather/scripts/start
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Then enable it:
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable pixoo-weather
-sudo systemctl start pixoo-weather
+open /tmp/pixoo_weather_preview.png
 ```
 
 ## Configuration
