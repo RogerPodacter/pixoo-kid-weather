@@ -1,90 +1,33 @@
 #!/usr/bin/env ruby
 require_relative "../config/environment"
+require_relative "../lib/pixoo_device"
+require_relative "../lib/location"
 
 class WeatherDisplay
   PREVIEW_PATH = "/tmp/pixoo_weather_preview.png"
 
-  @cached_coords = nil
-
   def self.lat
-    coords[:lat]
+    Location.lat
   end
 
   def self.lon
-    coords[:lon]
-  end
-
-  def self.coords
-    return @cached_coords if @cached_coords
-
-    location = ENV["LOCATION"]
-    unless location
-      abort "Error: Set LOCATION in your .env file (e.g., 'Brooklyn, NY')"
-    end
-
-    @cached_coords = geocode_location(location)
-  end
-
-  def self.geocode_location(location)
-    uri = URI("https://nominatim.openstreetmap.org/search")
-    uri.query = URI.encode_www_form(q: location, format: "json", limit: 5)
-
-    http = Net::HTTP.new(uri.host, uri.port)
-    http.use_ssl = true
-    http.open_timeout = 5
-    http.read_timeout = 10
-    request = Net::HTTP::Get.new(uri)
-    request["User-Agent"] = "pixoo-weather (https://github.com/RogerPodacter/pixoo-kid-weather)"
-
-    response = http.request(request)
-    unless response.is_a?(Net::HTTPSuccess)
-      abort "Error: Geocoding failed (HTTP #{response.code}). Try again later."
-    end
-    results = JSON.parse(response.body)
-
-    if results.empty?
-      abort "Error: Could not find location '#{location}'. Try a more specific name (e.g., 'Brooklyn, NY, USA')"
-    end
-
-    # Check for ambiguity - is there another high-importance result far away?
-    if results.length > 1
-      first = results.first
-      first_importance = first["importance"] || 0
-
-      # Only consider results with importance within 50% of the top result
-      significant_results = results.select { |r| (r["importance"] || 0) > first_importance * 0.5 }
-
-      ambiguous = significant_results[1..].any? do |r|
-        distance_km(first["lat"].to_f, first["lon"].to_f, r["lat"].to_f, r["lon"].to_f) > 50
-      end
-
-      if ambiguous
-        suggestions = significant_results.first(5).map { |r| "  - #{r['display_name']}" }
-        abort "Error: '#{location}' is ambiguous. Did you mean:\n#{suggestions.join("\n")}"
-      end
-    end
-
-    result = results.first
-    puts "[Geocoding] Found: #{result['display_name']}"
-
-    { lat: result["lat"].to_f, lon: result["lon"].to_f }
-  end
-
-  def self.distance_km(lat1, lon1, lat2, lon2)
-    # Haversine formula for distance between two coordinates
-    r = 6371 # Earth's radius in km
-    dlat = (lat2 - lat1) * Math::PI / 180
-    dlon = (lon2 - lon1) * Math::PI / 180
-    a = Math.sin(dlat / 2)**2 + Math.cos(lat1 * Math::PI / 180) * Math.cos(lat2 * Math::PI / 180) * Math.sin(dlon / 2)**2
-    2 * r * Math.asin(Math.sqrt(a))
+    Location.lon
   end
 
   def self.countdown_start
-    ENV["COUNTDOWN_START"]
+    ENV["WEATHER_COUNTDOWN_START"]
   end
 
   def self.countdown_end
-    ENV["COUNTDOWN_END"]
+    ENV["WEATHER_COUNTDOWN_END"]
+  end
+
+  def self.resolve_device
+    PixooDevice.resolve(ENV.fetch("WEATHER_DEVICE", nil))
+  rescue PixooDevice::NoneOnNetwork, PixooDevice::NotFound => e
+    abort e.message
+  rescue PixooDevice::AmbiguousDevice => e
+    abort "WEATHER_DEVICE not set.\n#{e.message}\nRun `scripts/weather --list` to see devices."
   end
 
   WEATHER_CODES = {
@@ -127,9 +70,9 @@ class WeatherDisplay
     if @preview
       log "Preview mode: output to #{PREVIEW_PATH}"
     else
-      @pixoo = Pixoo::Client.find_all.first
-      abort "No Pixoo device found!" unless @pixoo
-      log "Weather display started (#{@pixoo.ip}). Ctrl+C to stop."
+      @pixoo = self.class.resolve_device
+      log "Weather display started (#{@pixoo.ip})"
+      log "Ctrl+C to stop."
     end
   end
 
@@ -534,6 +477,32 @@ class WeatherDisplay
   end
 end
 
+# Clean exit on Ctrl+C
+trap("INT") { puts; exit }
+
 # Run it
-preview_mode = ARGV.include?("--preview")
-WeatherDisplay.new(preview: preview_mode).run
+if ARGV.include?("--list")
+  PixooDevice.list_devices
+elsif ARGV.include?("--help") || ARGV.include?("-h")
+  puts "Usage: scripts/weather [OPTIONS]"
+  puts
+  puts "Options:"
+  puts "  --list      Discover and list all Pixoo devices on the network"
+  puts "  --preview   Render to #{WeatherDisplay::PREVIEW_PATH} instead of device"
+  puts "  --help      Show this help message"
+  puts
+  puts "Environment variables:"
+  puts "  LOCATION                Location for weather, e.g., 'Brooklyn, NY' (required)"
+  puts "  WEATHER_DEVICE          Device name (optional if only one device)"
+  puts "  WEATHER_COUNTDOWN_START Countdown bar start time (e.g., 8:00am)"
+  puts "  WEATHER_COUNTDOWN_END   Countdown bar end time (e.g., 8:20am)"
+  puts
+  puts "Examples:"
+  puts "  scripts/weather --list                    # Find devices"
+  puts "  WEATHER_DEVICE=\"Kitchen\" scripts/weather # Use specific device"
+  puts
+  puts "Device names are set in the Divoom app."
+else
+  preview_mode = ARGV.include?("--preview")
+  WeatherDisplay.new(preview: preview_mode).run
+end
