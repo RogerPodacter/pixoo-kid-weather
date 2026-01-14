@@ -1,5 +1,6 @@
 #!/usr/bin/env ruby
 require_relative "../config/environment"
+require_relative "../lib/pixoo_device"
 
 class WeatherDisplay
   PREVIEW_PATH = "/tmp/pixoo_weather_preview.png"
@@ -80,11 +81,28 @@ class WeatherDisplay
   end
 
   def self.countdown_start
-    ENV["COUNTDOWN_START"]
+    ENV["WEATHER_COUNTDOWN_START"]
   end
 
   def self.countdown_end
-    ENV["COUNTDOWN_END"]
+    ENV["WEATHER_COUNTDOWN_END"]
+  end
+
+  def self.resolve_device
+    name = ENV["WEATHER_DEVICE"]&.strip
+
+    if name.nil? || name.empty?
+      devices = PixooDevice.discover
+      abort "No Pixoo devices found on network!" if devices.empty?
+      return devices.first if devices.length == 1
+      abort "Error: WEATHER_DEVICE not set (multiple devices found)\n" \
+            "Run `scripts/weather --list` to see devices\n\n" \
+            "Available:\n#{PixooDevice.format_device_list(devices)}"
+    end
+
+    PixooDevice.find_by_name(name)
+  rescue PixooDevice::NoneOnNetwork, PixooDevice::NotFound => e
+    abort e.message
   end
 
   WEATHER_CODES = {
@@ -127,9 +145,9 @@ class WeatherDisplay
     if @preview
       log "Preview mode: output to #{PREVIEW_PATH}"
     else
-      @pixoo = Pixoo::Client.find_all.first
-      abort "No Pixoo device found!" unless @pixoo
-      log "Weather display started (#{@pixoo.ip}). Ctrl+C to stop."
+      @pixoo = self.class.resolve_device
+      log "Weather display started (#{@pixoo.ip})"
+      log "Ctrl+C to stop."
     end
   end
 
@@ -534,6 +552,32 @@ class WeatherDisplay
   end
 end
 
+# Clean exit on Ctrl+C
+trap("INT") { puts; exit }
+
 # Run it
-preview_mode = ARGV.include?("--preview")
-WeatherDisplay.new(preview: preview_mode).run
+if ARGV.include?("--list")
+  PixooDevice.list_devices
+elsif ARGV.include?("--help") || ARGV.include?("-h")
+  puts "Usage: scripts/weather [OPTIONS]"
+  puts
+  puts "Options:"
+  puts "  --list      Discover and list all Pixoo devices on the network"
+  puts "  --preview   Render to #{WeatherDisplay::PREVIEW_PATH} instead of device"
+  puts "  --help      Show this help message"
+  puts
+  puts "Environment variables:"
+  puts "  LOCATION                Location for weather, e.g., 'Brooklyn, NY' (required)"
+  puts "  WEATHER_DEVICE          Device name (optional if only one device)"
+  puts "  WEATHER_COUNTDOWN_START Countdown bar start time (e.g., 8:00am)"
+  puts "  WEATHER_COUNTDOWN_END   Countdown bar end time (e.g., 8:20am)"
+  puts
+  puts "Examples:"
+  puts "  scripts/weather --list                    # Find devices"
+  puts "  WEATHER_DEVICE=\"Kitchen\" scripts/weather # Use specific device"
+  puts
+  puts "Device names are set in the Divoom app."
+else
+  preview_mode = ARGV.include?("--preview")
+  WeatherDisplay.new(preview: preview_mode).run
+end
