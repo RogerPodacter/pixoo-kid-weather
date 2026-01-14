@@ -27,16 +27,41 @@ scripts/weather --list
 
 Use the device name (as set in the Divoom app) to target specific devices.
 
-## Docker (Recommended for Pi)
+## Docker on Raspberry Pi
+
+### First-time setup
 
 ```bash
-cp .env.example .env     # edit with your location
-docker compose up -d
+# Clone and configure
+cd /home/pi
+git clone https://github.com/RogerPodacter/pixoo-kid-weather
+cd pixoo-kid-weather
+cp .env.example .env
+nano .env  # edit with your location and device names
+
+# Install systemd service (starts on boot)
+sudo cp pixoo-weather.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable pixoo-weather
+sudo systemctl start pixoo-weather
 ```
 
-Docker handles auto-restart on crash/reboot. To update:
+### Auto-updates (optional)
+
 ```bash
-scripts/update   # or: git pull && docker compose up --build -d
+crontab -e
+```
+Add:
+```
+0 * * * * cd /home/pi/pixoo-kid-weather && ./scripts/update
+```
+
+### Commands
+
+```bash
+sudo systemctl status pixoo-weather   # check status
+docker compose logs -f                 # view logs
+scripts/update                         # pull updates and restart
 ```
 
 ---
