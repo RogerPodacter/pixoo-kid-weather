@@ -35,24 +35,6 @@ class BedroomDisplay
     attr_accessor :test_time
   end
 
-  # Pre-computed glow patterns to avoid Math.sqrt in inner loops
-  GLOW_PATTERNS = {
-    1 => [[-1, 0, 0.33], [1, 0, 0.33], [0, -1, 0.33], [0, 1, 0.33]],
-    2 => [
-      [-1, 0, 0.5], [1, 0, 0.5], [0, -1, 0.5], [0, 1, 0.5],
-      [-1, -1, 0.29], [-1, 1, 0.29], [1, -1, 0.29], [1, 1, 0.29],
-      [-2, 0, 0.17], [2, 0, 0.17], [0, -2, 0.17], [0, 2, 0.17]
-    ]
-  }.freeze
-
-  # Pre-computed sin lookup table (256 entries, covers 0 to 2π)
-  SIN_TABLE = (0...256).map { |i| Math.sin(i * Math::PI * 2 / 256) }.freeze
-
-  def fast_sin(x)
-    # Map x to 0-255 range (x is expected to be in radians-ish units)
-    SIN_TABLE[(x * 40.74).to_i & 255]  # 40.74 ≈ 256 / (2π)
-  end
-
   def initialize(preview: false)
     @preview = preview
     @frame = 0
@@ -339,16 +321,15 @@ class BedroomDisplay
       next if star[:y] >= 54  # Don't draw on ground
 
       # Twinkle effect - constellation stars sparkle more
-      # Using fast_sin lookup table instead of Math.sin
       if star[:constellation]
         # Sparkle: periodic bright flashes
-        sparkle = fast_sin((@frame + star[:twinkle_offset]) * 0.25)
+        sparkle = Math.sin((@frame + star[:twinkle_offset]) * 0.25)
         sparkle_boost = sparkle > 0.7 ? (sparkle - 0.7) / 0.3 : 0
         twinkle = 0.7 + sparkle * 0.3 + sparkle_boost * 0.5
         alpha = (star_alpha * twinkle).clamp(0, 1)
         brightness = (255 * alpha).round
       else
-        twinkle = fast_sin((@frame + star[:twinkle_offset]) * 0.15) * 0.3 + 0.7
+        twinkle = Math.sin((@frame + star[:twinkle_offset]) * 0.15) * 0.3 + 0.7
         alpha = (star_alpha * twinkle).clamp(0, 1)
         brightness = (160 * alpha).round
       end
@@ -362,17 +343,20 @@ class BedroomDisplay
       new_b = [b + (brightness * 0.85).round, 255].min
       img.set_pixel(star[:y], star[:x], new_r, new_g, new_b)
 
-      # Constellation stars get sparkle glow using pre-computed patterns
+      # Constellation stars get sparkle glow
       if star[:constellation] && alpha > 0.6
         glow_size = alpha > 0.9 ? 2 : 1  # Bigger glow when sparkling
-        glow_base = (brightness * 0.35).round
-
-        GLOW_PATTERNS[glow_size].each do |dx, dy, dist_factor|
-          nx, ny = star[:x] + dx, star[:y] + dy
-          next if nx < 0 || nx >= 64 || ny < 0 || ny >= 54
-          sr, sg, sb = img.get_pixel(ny, nx)
-          glow = (glow_base * dist_factor).round
-          img.set_pixel(ny, nx, [sr + glow, 255].min, [sg + glow, 255].min, [sb + (glow * 0.8).round, 255].min)
+        (-glow_size..glow_size).each do |dx|
+          (-glow_size..glow_size).each do |dy|
+            next if dx == 0 && dy == 0
+            dist = Math.sqrt(dx*dx + dy*dy)
+            next if dist > glow_size
+            nx, ny = star[:x] + dx, star[:y] + dy
+            next if nx < 0 || nx >= 64 || ny < 0 || ny >= 54
+            sr, sg, sb = img.get_pixel(ny, nx)
+            glow = (brightness * 0.35 * (1 - dist/glow_size/1.5)).round
+            img.set_pixel(ny, nx, [sr + glow, 255].min, [sg + glow, 255].min, [sb + (glow * 0.8).round, 255].min)
+          end
         end
       end
     end
@@ -492,29 +476,17 @@ class BedroomDisplay
     end
   end
 
-  # Pre-computed ray directions for 8 rays (cos, sin pairs)
-  RAY_DIRECTIONS = (0...8).map do |i|
-    angle = i * Math::PI * 2 / 8
-    [Math.cos(angle), Math.sin(angle)]
-  end.freeze
-
   def draw_sun_rays(img, cx, cy, radius, alpha)
-    ray_length = (4 + fast_sin(@frame * 0.1) * 2).round
-    rotation_offset = @frame * 0.02
+    ray_count = 8
+    ray_length = (4 + Math.sin(@frame * 0.1) * 2).round
 
-    RAY_DIRECTIONS.each_with_index do |(base_cos, base_sin), i|
-      # Apply rotation using angle addition formulas
-      # cos(a+b) = cos(a)cos(b) - sin(a)sin(b)
-      # sin(a+b) = sin(a)cos(b) + cos(a)sin(b)
-      rot_cos = fast_sin(rotation_offset + Math::PI / 2)  # cos = sin(x + π/2)
-      rot_sin = fast_sin(rotation_offset)
-      dir_x = base_cos * rot_cos - base_sin * rot_sin
-      dir_y = base_sin * rot_cos + base_cos * rot_sin
+    ray_count.times do |i|
+      angle = (i * Math::PI * 2 / ray_count) + (@frame * 0.02)
 
       ray_length.times do |r|
         dist = radius + 1 + r
-        x = cx + (dir_x * dist).round
-        y = cy + (dir_y * dist).round
+        x = cx + (Math.cos(angle) * dist).round
+        y = cy + (Math.sin(angle) * dist).round
 
         next if x < 0 || x >= 64 || y < 0 || y >= 54
 
