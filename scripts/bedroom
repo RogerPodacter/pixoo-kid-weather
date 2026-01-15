@@ -26,8 +26,6 @@ class BedroomDisplay
 
   def self.resolve_device
     PixooDevice.resolve(ENV.fetch("BEDROOM_DEVICE", nil))
-  rescue PixooDevice::NoneOnNetwork, PixooDevice::NotFound => e
-    abort e.message
   rescue PixooDevice::AmbiguousDevice => e
     abort "BEDROOM_DEVICE not set.\n#{e.message}\nRun `scripts/bedroom --list` to see devices."
   end
