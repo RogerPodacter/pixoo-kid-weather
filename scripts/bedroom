@@ -63,7 +63,7 @@ class BedroomDisplay
       loop do
         update_display
         @frame += 1
-        sleep 0.1  # 10 FPS for smooth animation
+        # No sleep - let send_animation pace the loop
       rescue => e
         log "Error: #{e.message}"
         sleep 5
@@ -248,12 +248,17 @@ class BedroomDisplay
   end
 
   def update_display
+    t0 = Time.now
     img = render_frame  # Single source of truth
+    render_time = Time.now - t0
 
     if @preview
       save_preview(img)
     else
+      t1 = Time.now
       @pixoo.send_animation([img])
+      send_time = Time.now - t1
+      log "render=#{(render_time * 1000).round}ms send=#{(send_time * 1000).round}ms" if @frame % 10 == 0
     end
   end
 
