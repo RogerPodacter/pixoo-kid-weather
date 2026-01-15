@@ -15,32 +15,64 @@ module PixooDevice
   end
 
   # Find device by name (case-insensitive). Discovers automatically.
-  # Raises NotFound if name doesn't match, NoneOnNetwork if no devices found.
-  def self.find_by_name(name)
-    devices = discover
-    raise NoneOnNetwork, "No Pixoo devices found on network!" if devices.empty?
+  # By default, waits and retries if device isn't found (it may be offline).
+  # Set wait: false to fail immediately instead.
+  def self.find_by_name(name, wait: true)
+    waiting_shown = false
 
-    match = devices.find { |d| device_name(d).to_s.casecmp?(name) }
-    return match if match
+    loop do
+      devices = discover
 
-    raise NotFound, "No device named \"#{name}\"\n\nAvailable:\n#{format_device_list(devices)}"
+      if devices.any?
+        match = devices.find { |d| device_name(d).to_s.casecmp?(name) }
+        return match if match
+      end
+
+      # Device not found - error immediately if not waiting
+      unless wait
+        if devices.empty?
+          raise NoneOnNetwork, "No Pixoo devices found on network!"
+        else
+          raise NotFound, "No device named \"#{name}\"\n\nAvailable:\n#{format_device_list(devices)}"
+        end
+      end
+
+      # Wait and retry
+      unless waiting_shown
+        puts "Waiting for device \"#{name}\"..."
+        waiting_shown = true
+      end
+      sleep 5
+    end
   end
 
   # Resolve device by name. Auto-selects if only one device on network.
   # name: device name (can be nil to auto-select)
-  # Returns device, or raises NoneOnNetwork/AmbiguousDevice/NotFound
-  def self.resolve(name)
+  # wait: if true, waits for device to come online (default: true)
+  # Returns device, or raises AmbiguousDevice if multiple found without name
+  def self.resolve(name, wait: true)
     name = name&.strip
     name = nil if name&.empty?
 
     if name.nil?
-      devices = discover
-      raise NoneOnNetwork, "No Pixoo devices found on network!" if devices.empty?
-      return devices.first if devices.length == 1
-      raise AmbiguousDevice, "Multiple devices found:\n#{format_device_list(devices)}"
-    end
+      waiting_shown = false
+      loop do
+        devices = discover
+        return devices.first if devices.length == 1
+        raise AmbiguousDevice, "Multiple devices found:\n#{format_device_list(devices)}" if devices.length > 1
 
-    find_by_name(name)
+        # No devices found
+        raise NoneOnNetwork, "No Pixoo devices found on network!" unless wait
+
+        unless waiting_shown
+          puts "Waiting for device..."
+          waiting_shown = true
+        end
+        sleep 5
+      end
+    else
+      find_by_name(name, wait: wait)
+    end
   end
 
   # Format device list for display
