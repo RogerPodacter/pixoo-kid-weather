@@ -63,7 +63,7 @@ class BedroomDisplay
       loop do
         update_display
         @frame += 1
-        # No sleep - let send_animation pace the loop
+        sleep 0.1  # 10 FPS for smooth animation
       rescue => e
         log "Error: #{e.message}"
         sleep 5
