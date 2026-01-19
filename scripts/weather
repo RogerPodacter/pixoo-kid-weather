@@ -22,6 +22,10 @@ class WeatherDisplay
     ENV["WEATHER_COUNTDOWN_END"]
   end
 
+  def self.fireworks_duration
+    ENV.fetch("WEATHER_FIREWORKS_DURATION", "2m")
+  end
+
   def self.resolve_device
     PixooDevice.resolve(ENV.fetch("WEATHER_DEVICE", nil))
   rescue PixooDevice::AmbiguousDevice => e
@@ -64,6 +68,7 @@ class WeatherDisplay
     @weather = nil
     @weather_fetched_at = nil
     @last_state = {}
+    @firework_frame = 0
 
     if @preview
       log "Preview mode: output to #{PREVIEW_PATH}"
@@ -151,14 +156,14 @@ class WeatherDisplay
     sky, _ = sky_emoji_for(@weather)
     comfort = comfort_emoji_for(@weather)
     clothing = clothing_for_temp(@weather[:feels_like])
-    in_countdown = countdown_active?
+    progress = countdown_progress
 
     # Build current state
     current_state = {
       sky: sky,
       comfort: comfort,
       clothing: clothing.join,
-      countdown: in_countdown
+      countdown: progress ? (progress * 100).round : nil
     }
 
     # Log changes
@@ -167,7 +172,9 @@ class WeatherDisplay
       changes << "sky=#{sky}" if @last_state[:sky] != sky
       changes << "comfort=#{comfort}" if @last_state[:comfort] != comfort
       changes << "clothing=#{clothing.join}" if @last_state[:clothing] != clothing.join
-      changes << "countdown=#{in_countdown ? 'on' : 'off'}" if @last_state[:countdown] != in_countdown
+      if @last_state[:countdown] != current_state[:countdown]
+        changes << "countdown=#{progress ? "#{(progress * 100).round}%" : 'off'}"
+      end
 
       if @last_state.empty?
         log "Display initialized: sky=#{sky} comfort=#{comfort} clothing=#{clothing.join}"
@@ -178,11 +185,12 @@ class WeatherDisplay
       @last_state = current_state
     end
 
+    # Draw countdown background first (if active), then everything on top
+    draw_countdown_background(img)
     draw_sky_emoji(img)
     draw_comfort_emoji(img)
     draw_clothing(img)
     draw_parent_info(img)
-    draw_countdown_bar(img)
 
     if @preview
       save_preview(img)
@@ -202,15 +210,6 @@ class WeatherDisplay
     end
 
     png.save(PREVIEW_PATH)
-  end
-
-  def countdown_active?
-    start_time = countdown_start
-    end_time = countdown_end
-    return false unless start_time && end_time
-
-    now = Time.current
-    now >= start_time && now < end_time
   end
 
   # --- Weather codes ---
@@ -321,7 +320,10 @@ class WeatherDisplay
     feels = @weather[:feels_like] || 0
     time_str = Time.current.strftime("%-I:%M")
     info = "#{feels}° #{time_str}"
-    draw_mini_text(img, info, 56, [136, 136, 136])
+
+    # Use white text during countdown/fireworks for contrast against colored/black bg
+    color = (countdown_progress || countdown_finished?) ? [255, 255, 255] : [136, 136, 136]
+    draw_mini_text(img, info, 56, color)
   end
 
   def draw_mini_text(img, text, y, color)
@@ -350,7 +352,7 @@ class WeatherDisplay
     end
   end
 
-  # --- Countdown bar ---
+  # --- Countdown background ---
   def countdown_start
     val = self.class.countdown_start
     val ? Time.zone.parse(val) : nil
@@ -361,45 +363,156 @@ class WeatherDisplay
     val ? Time.zone.parse(val) : nil
   end
 
-  def draw_countdown_bar(img)
+  # For testing: override countdown progress (0.0 = just started, 1.0 = time's up)
+  class << self
+    attr_accessor :test_countdown_progress
+  end
+
+  def countdown_progress
+    # Test mode override
+    return self.class.test_countdown_progress if self.class.test_countdown_progress
+
     start_time = countdown_start
     end_time = countdown_end
 
-    # Skip if countdown not configured
-    return unless start_time && end_time
+    # Not configured
+    return nil unless start_time && end_time
 
     now = Time.current
 
-    # Only show during countdown window
-    return if now < start_time || now >= end_time
+    # Outside countdown window
+    return nil if now < start_time || now >= end_time
 
+    # Calculate progress (0.0 = just started, 1.0 = time's up)
     total_duration = end_time - start_time
-    remaining = [end_time - now, 0].max
-    fill_pct = total_duration > 0 ? (remaining / total_duration) : 0
+    elapsed = now - start_time
+    total_duration > 0 ? (elapsed / total_duration).clamp(0, 1) : 1.0
+  end
 
-    bar_y = 62
-    bar_height = 2
-    bar_width = 60
-    bar_x = 2
+  def draw_countdown_background(img)
+    # Fireworks celebration when countdown finishes
+    if countdown_finished?
+      draw_fireworks(img)
+      return
+    end
 
-    # Background
-    bar_width.times do |dx|
-      bar_height.times do |dy|
-        img.set_pixel(bar_y + dy, bar_x + dx, 40, 40, 40)
+    progress = countdown_progress
+    return unless progress
+
+    # Color: green (0%) → yellow (50%) → red (100%)
+    # HSV hue: 120 (green) → 60 (yellow) → 0 (red)
+    hue = 120 * (1 - progress)
+    r, g, b = hsv_to_rgb(hue, 0.85, 0.7)
+
+    # Background drains right-to-left as time runs out
+    # remaining_cols = how many columns are still colored (on the right side)
+    remaining_cols = ((1 - progress) * 64).round
+    start_col = 64 - remaining_cols  # Color starts here and goes to edge
+
+    64.times do |y|
+      64.times do |x|
+        if x >= start_col
+          img.set_pixel(y, x, r, g, b)
+        else
+          img.set_pixel(y, x, 0, 0, 0)  # Black = time's up for this column
+        end
+      end
+    end
+  end
+
+  # Check if countdown just finished (within fireworks duration after end)
+  def countdown_finished?
+    return true if self.class.test_countdown_finished
+
+    end_time = countdown_end
+    return false unless end_time
+
+    duration = parse_duration(self.class.fireworks_duration)
+    now = Time.current
+    now >= end_time && now < end_time + duration
+  end
+
+  # Parse duration string like "2m", "30s", "90s", "5m"
+  def parse_duration(str)
+    return 0 if str.nil? || str.empty? || str == "0"
+
+    match = str.match(/^(\d+)(s|m)?$/i)
+    return 2.minutes unless match  # Default fallback
+
+    value = match[1].to_i
+    unit = match[2]&.downcase || "s"
+
+    case unit
+    when "m" then value.minutes
+    when "s" then value.seconds
+    else value.seconds
+    end
+  end
+
+  # For testing fireworks
+  class << self
+    attr_accessor :test_countdown_finished
+  end
+
+  def draw_fireworks(img)
+    # Black background
+    64.times do |y|
+      64.times do |x|
+        img.set_pixel(y, x, 0, 0, 0)
       end
     end
 
-    # Filled portion (anchored right, shrinks from left)
-    fill_width = (bar_width * fill_pct).round
-    start_x = bar_x + (bar_width - fill_width)
+    # Animated firework bursts
+    @firework_frame += 1
 
-    # Color: green (120°) → red (0°)
-    hue = 120 * fill_pct
-    r, g, b = hsv_to_rgb(hue, 1.0, 1.0)
+    # Multiple firework centers that cycle
+    fireworks = [
+      { cx: 32, cy: 20, color_offset: 0 },
+      { cx: 15, cy: 30, color_offset: 40 },
+      { cx: 50, cy: 25, color_offset: 80 },
+      { cx: 32, cy: 45, color_offset: 120 },
+    ]
 
-    fill_width.times do |dx|
-      bar_height.times do |dy|
-        img.set_pixel(bar_y + dy, start_x + dx, r, g, b)
+    fireworks.each_with_index do |fw, i|
+      # Each firework has its own phase
+      phase = (@firework_frame + i * 15) % 60
+
+      if phase < 40  # Burst expanding
+        draw_firework_burst(img, fw[:cx], fw[:cy], phase, fw[:color_offset])
+      end
+      # else: pause before next burst
+    end
+  end
+
+  def draw_firework_burst(img, cx, cy, phase, color_offset)
+    # Burst expands from center
+    radius = (phase * 0.8).round
+    brightness = phase < 20 ? 1.0 : (1.0 - (phase - 20) / 20.0)  # Fade out
+
+    # Draw particles in a circle
+    num_particles = 16
+    num_particles.times do |i|
+      angle = (i * Math::PI * 2 / num_particles)
+
+      # Particle position
+      px = cx + (Math.cos(angle) * radius).round
+      py = cy + (Math.sin(angle) * radius).round
+
+      next unless px >= 0 && px < 64 && py >= 0 && py < 64
+
+      # Red/orange tones for urgency
+      hue = (color_offset + i * 5) % 40  # 0-40 = red to orange range
+      r, g, b = hsv_to_rgb(hue, 1.0, brightness)
+
+      img.set_pixel(py, px, r, g, b)
+
+      # Sparkle trail
+      if radius > 3
+        trail_px = cx + (Math.cos(angle) * (radius - 2)).round
+        trail_py = cy + (Math.sin(angle) * (radius - 2)).round
+        if trail_px >= 0 && trail_px < 64 && trail_py >= 0 && trail_py < 64
+          img.set_pixel(trail_py, trail_px, (r * 0.5).round, (g * 0.5).round, (b * 0.5).round)
+        end
       end
     end
   end
@@ -478,6 +591,82 @@ end
 # Clean exit on Ctrl+C
 trap("INT") { puts; exit }
 
+def generate_countdown_gif
+  PixooDevice.require_imagemagick!
+  gif_path = "/tmp/pixoo_weather_countdown.gif"
+
+  puts "Generating countdown GIF..."
+
+  display = WeatherDisplay.new(preview: true)
+  pngs = []
+
+  # 20 frames from 0% to 100%
+  21.times do |i|
+    progress = i / 20.0
+    WeatherDisplay.test_countdown_progress = progress
+    display.send(:refresh_weather_if_needed)
+    display.send(:update_display)
+
+    # Read the preview and add to pngs
+    png = ChunkyPNG::Image.from_file(WeatherDisplay::PREVIEW_PATH)
+    pngs << png
+    print "."
+  end
+  puts
+
+  WeatherDisplay.test_countdown_progress = nil
+
+  # Save frames and create GIF
+  tmp_dir = "/tmp/pixoo_weather_frames"
+  FileUtils.mkdir_p(tmp_dir)
+  FileUtils.rm_f(Dir.glob("#{tmp_dir}/*.png"))
+
+  pngs.each_with_index do |png, i|
+    png.save("#{tmp_dir}/frame_#{i.to_s.rjust(3, '0')}.png")
+  end
+
+  magick_cmd = PixooDevice.imagemagick_command
+  system("#{magick_cmd} -delay 50 -loop 0 #{tmp_dir}/frame_*.png -scale 256x256 #{gif_path}")
+  puts "Saved to: #{gif_path}"
+end
+
+def generate_fireworks_gif
+  PixooDevice.require_imagemagick!
+  gif_path = "/tmp/pixoo_weather_fireworks.gif"
+
+  puts "Generating fireworks GIF..."
+
+  display = WeatherDisplay.new(preview: true)
+  WeatherDisplay.test_countdown_finished = true
+  pngs = []
+
+  # 60 frames of fireworks animation
+  60.times do |i|
+    display.send(:refresh_weather_if_needed)
+    display.send(:update_display)
+
+    png = ChunkyPNG::Image.from_file(WeatherDisplay::PREVIEW_PATH)
+    pngs << png
+    print "."
+  end
+  puts
+
+  WeatherDisplay.test_countdown_finished = nil
+
+  # Save frames and create GIF
+  tmp_dir = "/tmp/pixoo_weather_frames"
+  FileUtils.mkdir_p(tmp_dir)
+  FileUtils.rm_f(Dir.glob("#{tmp_dir}/*.png"))
+
+  pngs.each_with_index do |png, i|
+    png.save("#{tmp_dir}/frame_#{i.to_s.rjust(3, '0')}.png")
+  end
+
+  magick_cmd = PixooDevice.imagemagick_command
+  system("#{magick_cmd} -delay 10 -loop 0 #{tmp_dir}/frame_*.png -scale 256x256 #{gif_path}")
+  puts "Saved to: #{gif_path}"
+end
+
 # Run it
 if ARGV.include?("--list")
   PixooDevice.list_devices
@@ -485,22 +674,44 @@ elsif ARGV.include?("--help") || ARGV.include?("-h")
   puts "Usage: scripts/weather [OPTIONS]"
   puts
   puts "Options:"
-  puts "  --list      Discover and list all Pixoo devices on the network"
-  puts "  --preview   Render to #{WeatherDisplay::PREVIEW_PATH} instead of device"
-  puts "  --help      Show this help message"
+  puts "  --list                   Discover and list all Pixoo devices"
+  puts "  --preview                Render single frame to #{WeatherDisplay::PREVIEW_PATH}"
+  puts "  --test-countdown=PCT     Preview at countdown progress (0-100)"
+  puts "  --test-countdown-gif     Generate GIF showing full countdown"
+  puts "  --test-fireworks-gif     Generate GIF of fireworks animation"
+  puts "  --help                   Show this help message"
   puts
   puts "Environment variables:"
-  puts "  LOCATION                Location for weather, e.g., 'Brooklyn, NY' (required)"
-  puts "  WEATHER_DEVICE          Device name (optional if only one device)"
-  puts "  WEATHER_COUNTDOWN_START Countdown bar start time (e.g., 8:00am)"
-  puts "  WEATHER_COUNTDOWN_END   Countdown bar end time (e.g., 8:20am)"
+  puts "  LOCATION                    Location for weather (required)"
+  puts "  WEATHER_DEVICE              Device name (optional if only one device)"
+  puts "  WEATHER_COUNTDOWN_START     Countdown start time (e.g., 8:00am)"
+  puts "  WEATHER_COUNTDOWN_END       Countdown end time (e.g., 8:20am)"
+  puts "  WEATHER_FIREWORKS_DURATION  How long fireworks show after countdown (default: 2m)"
   puts
   puts "Examples:"
-  puts "  scripts/weather --list                    # Find devices"
-  puts "  WEATHER_DEVICE=\"Kitchen\" scripts/weather # Use specific device"
-  puts
-  puts "Device names are set in the Divoom app."
+  puts "  scripts/weather --list"
+  puts "  scripts/weather --preview"
+  puts "  scripts/weather --test-countdown=50      # Preview at 50% (halfway, yellow)"
+  puts "  scripts/weather --test-countdown-gif     # Countdown draining to black"
+  puts "  scripts/weather --test-fireworks-gif     # Fireworks celebration"
+  puts "  WEATHER_DEVICE=\"Kitchen\" scripts/weather"
+elsif ARGV.include?("--test-countdown-gif")
+  generate_countdown_gif
+elsif ARGV.include?("--test-fireworks-gif")
+  generate_fireworks_gif
+elsif (countdown_arg = ARGV.find { |a| a.start_with?("--test-countdown=") })
+  pct = countdown_arg.split("=")[1].to_f
+  WeatherDisplay.test_countdown_progress = pct / 100.0
+  display = WeatherDisplay.new(preview: true)
+  display.send(:refresh_weather_if_needed)
+  display.send(:update_display)
+  puts "Preview at #{pct.round}% countdown saved to: #{WeatherDisplay::PREVIEW_PATH}"
+  puts "Color drains right-to-left: green (0%) → yellow (50%) → red (100%) → black"
+elsif ARGV.include?("--preview")
+  display = WeatherDisplay.new(preview: true)
+  display.send(:refresh_weather_if_needed)
+  display.send(:update_display)
+  puts "Preview saved to: #{WeatherDisplay::PREVIEW_PATH}"
 else
-  preview_mode = ARGV.include?("--preview")
-  WeatherDisplay.new(preview: preview_mode).run
+  WeatherDisplay.new(preview: false).run
 end
