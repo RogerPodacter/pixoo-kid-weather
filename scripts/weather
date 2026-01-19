@@ -83,7 +83,9 @@ class WeatherDisplay
     loop do
       refresh_weather_if_needed
       update_display
-      sleep 1
+      # No sleep during fireworks - animate as fast as possible
+      # Otherwise 1 FPS is fine for static weather display
+      sleep 1 unless countdown_finished?
     rescue => e
       log "Error: #{e.message}"
       sleep 5
@@ -455,65 +457,125 @@ class WeatherDisplay
   end
 
   def draw_fireworks(img)
-    # Black background
+    # Dark night sky background
     64.times do |y|
       64.times do |x|
-        img.set_pixel(y, x, 0, 0, 0)
+        img.set_pixel(y, x, 3, 3, 10)
       end
     end
 
-    # Animated firework bursts
+    @firework_frame ||= 0
     @firework_frame += 1
+    @particles ||= []
 
-    # Multiple firework centers that cycle
-    fireworks = [
-      { cx: 32, cy: 20, color_offset: 0 },
-      { cx: 15, cy: 30, color_offset: 40 },
-      { cx: 50, cy: 25, color_offset: 80 },
-      { cx: 32, cy: 45, color_offset: 120 },
-    ]
-
-    fireworks.each_with_index do |fw, i|
-      # Each firework has its own phase
-      phase = (@firework_frame + i * 15) % 60
-
-      if phase < 40  # Burst expanding
-        draw_firework_burst(img, fw[:cx], fw[:cy], phase, fw[:color_offset])
-      end
-      # else: pause before next burst
+    # Spawn new explosions randomly
+    if rand < 0.15 || @particles.empty?
+      spawn_explosion
     end
-  end
 
-  def draw_firework_burst(img, cx, cy, phase, color_offset)
-    # Burst expands from center
-    radius = (phase * 0.8).round
-    brightness = phase < 20 ? 1.0 : (1.0 - (phase - 20) / 20.0)  # Fade out
+    # Update and draw all particles
+    @particles.each do |p|
+      # Physics
+      p[:x] += p[:vx]
+      p[:y] += p[:vy]
+      p[:vy] += 0.12  # Gravity
+      p[:vx] *= 0.97  # Air drag
+      p[:vy] *= 0.97
+      p[:life] -= 1
 
-    # Draw particles in a circle
-    num_particles = 16
-    num_particles.times do |i|
-      angle = (i * Math::PI * 2 / num_particles)
+      next if p[:life] <= 0
 
-      # Particle position
-      px = cx + (Math.cos(angle) * radius).round
-      py = cy + (Math.sin(angle) * radius).round
-
+      px, py = p[:x].round, p[:y].round
       next unless px >= 0 && px < 64 && py >= 0 && py < 64
 
-      # Red/orange tones for urgency
-      hue = (color_offset + i * 5) % 40  # 0-40 = red to orange range
-      r, g, b = hsv_to_rgb(hue, 1.0, brightness)
+      # Fade based on life remaining - stay bright longer
+      life_pct = p[:life] / p[:max_life].to_f
+      brightness = (life_pct > 0.3 ? 1.0 : life_pct / 0.3).clamp(0, 1)
+      # Add twinkle
+      brightness *= (0.7 + rand * 0.3)
+
+      r = (p[:color][0] * brightness).round
+      g = (p[:color][1] * brightness).round
+      b = (p[:color][2] * brightness).round
 
       img.set_pixel(py, px, r, g, b)
 
-      # Sparkle trail
-      if radius > 3
-        trail_px = cx + (Math.cos(angle) * (radius - 2)).round
-        trail_py = cy + (Math.sin(angle) * (radius - 2)).round
-        if trail_px >= 0 && trail_px < 64 && trail_py >= 0 && trail_py < 64
-          img.set_pixel(trail_py, trail_px, (r * 0.5).round, (g * 0.5).round, (b * 0.5).round)
+      # Glowing trail for fresh particles
+      if p[:life] > p[:max_life] * 0.7
+        trail_x = (p[:x] - p[:vx]).round
+        trail_y = (p[:y] - p[:vy]).round
+        if trail_x >= 0 && trail_x < 64 && trail_y >= 0 && trail_y < 64
+          img.set_pixel(trail_y, trail_x, (r * 0.5).round, (g * 0.5).round, (b * 0.5).round)
         end
       end
+    end
+
+    # Remove dead particles
+    @particles.reject! { |p| p[:life] <= 0 }
+
+    # Cap total particles
+    @particles = @particles.last(300) if @particles.size > 300
+  end
+
+  def spawn_explosion
+    # Random position in upper portion of screen
+    cx = rand(10..54)
+    cy = rand(8..40)
+
+    # Bright saturated colors
+    colors = [
+      [255, 50, 50],    # Bright red
+      [255, 100, 0],    # Vivid orange
+      [255, 220, 0],    # Golden yellow
+      [255, 255, 50],   # Bright yellow
+      [50, 255, 50],    # Neon green
+      [0, 255, 180],    # Turquoise
+      [50, 180, 255],   # Sky blue
+      [100, 100, 255],  # Bright blue
+      [180, 50, 255],   # Purple
+      [255, 50, 200],   # Hot pink
+      [255, 100, 150],  # Pink
+      [255, 255, 255],  # White
+      [255, 200, 100],  # Peach
+    ]
+    base_color = colors.sample
+
+    # Explosion particles with random velocities
+    particle_count = rand(35..60)
+    particle_count.times do
+      angle = rand * Math::PI * 2
+      # Vary speed significantly for organic look
+      speed = rand * 3.5 + 0.5
+      # Some particles go faster (outer ring effect)
+      speed *= 1.5 if rand < 0.3
+
+      # Slight color variation per particle (less variation to keep colors vivid)
+      color = base_color.map { |c| (c + rand(-15..15)).clamp(0, 255) }
+
+      @particles << {
+        x: cx.to_f,
+        y: cy.to_f,
+        vx: Math.cos(angle) * speed * (0.8 + rand * 0.4),
+        vy: Math.sin(angle) * speed * (0.8 + rand * 0.4) - rand * 1.5,  # Upward bias
+        color: color,
+        life: rand(25..50),
+        max_life: 50.0
+      }
+    end
+
+    # Add some extra bright center sparks
+    8.times do
+      angle = rand * Math::PI * 2
+      speed = rand * 1.5
+      @particles << {
+        x: cx.to_f,
+        y: cy.to_f,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed - 0.5,
+        color: [255, 255, 255],  # White hot center
+        life: rand(8..15),
+        max_life: 15.0
+      }
     end
   end
 
@@ -678,6 +740,7 @@ elsif ARGV.include?("--help") || ARGV.include?("-h")
   puts "  --preview                Render single frame to #{WeatherDisplay::PREVIEW_PATH}"
   puts "  --test-countdown=PCT     Preview at countdown progress (0-100)"
   puts "  --test-countdown-gif     Generate GIF showing full countdown"
+  puts "  --test-fireworks         Run fireworks on device (live test)"
   puts "  --test-fireworks-gif     Generate GIF of fireworks animation"
   puts "  --help                   Show this help message"
   puts
@@ -707,6 +770,11 @@ elsif (countdown_arg = ARGV.find { |a| a.start_with?("--test-countdown=") })
   display.send(:update_display)
   puts "Preview at #{pct.round}% countdown saved to: #{WeatherDisplay::PREVIEW_PATH}"
   puts "Color drains right-to-left: green (0%) → yellow (50%) → red (100%) → black"
+elsif ARGV.include?("--test-fireworks")
+  # Run fireworks on actual device
+  WeatherDisplay.test_countdown_finished = true
+  puts "Running fireworks on device (Ctrl+C to stop)..."
+  WeatherDisplay.new(preview: false).run
 elsif ARGV.include?("--preview")
   display = WeatherDisplay.new(preview: true)
   display.send(:refresh_weather_if_needed)

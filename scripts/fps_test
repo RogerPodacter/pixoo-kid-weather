@@ -1,0 +1,130 @@
+#!/usr/bin/env ruby
+require_relative "../config/environment"
+require_relative "../lib/pixoo_device"
+
+# Simple FPS diagnostic for Pixoo device
+class FPSTest
+  def initialize
+    @pixoo = PixooDevice.resolve(ENV.fetch("WEATHER_DEVICE", nil))
+    puts "Connected to #{@pixoo.ip}"
+    @frame = 0
+  end
+
+  def run
+    puts "\n=== Sending frames as fast as possible ==="
+
+    loop do
+      @frame += 1
+      img = render_fireworks_frame(speed: 100)
+
+      t1 = Time.now
+      @pixoo.send_animation([img])
+      send_time_ms = (Time.now - t1) * 1000
+
+      puts "Frame #{@frame}: send=#{send_time_ms.round}ms"
+    end
+  end
+
+  def render_fireworks_frame(speed: 100)
+    img = Pixoo::ImageBuffer.new(64, speed: speed)
+
+    # Dark sky background
+    64.times do |y|
+      64.times do |x|
+        img.set_pixel(y, x, 5, 5, 15)
+      end
+    end
+
+    # Render some firework particles
+    @particles ||= generate_particles
+    update_particles
+
+    @particles.each do |p|
+      px, py = p[:x].round, p[:y].round
+      next if py < 0 || py >= 64 || px < 0 || px >= 64
+      next if p[:life] <= 0
+
+      brightness = (p[:life] / p[:max_life].to_f * 255).round
+      r = (p[:color][0] * brightness / 255).round
+      g = (p[:color][1] * brightness / 255).round
+      b = (p[:color][2] * brightness / 255).round
+
+      img.set_pixel(py, px, r, g, b)
+    end
+
+    # Draw frame number in corner so we can see actual device update rate
+    draw_number(img, @frame % 100, 2, 2)
+
+    # Respawn if needed
+    if @particles.all? { |p| p[:life] <= 0 }
+      @particles = generate_particles
+    end
+
+    img
+  end
+
+  def draw_number(img, num, x, y)
+    # Simple 3x5 digit font
+    digits = {
+      0 => [0b111, 0b101, 0b101, 0b101, 0b111],
+      1 => [0b010, 0b110, 0b010, 0b010, 0b111],
+      2 => [0b111, 0b001, 0b111, 0b100, 0b111],
+      3 => [0b111, 0b001, 0b111, 0b001, 0b111],
+      4 => [0b101, 0b101, 0b111, 0b001, 0b001],
+      5 => [0b111, 0b100, 0b111, 0b001, 0b111],
+      6 => [0b111, 0b100, 0b111, 0b101, 0b111],
+      7 => [0b111, 0b001, 0b001, 0b001, 0b001],
+      8 => [0b111, 0b101, 0b111, 0b101, 0b111],
+      9 => [0b111, 0b101, 0b111, 0b001, 0b111]
+    }
+
+    tens = num / 10
+    ones = num % 10
+
+    [[tens, x], [ones, x + 4]].each do |digit, dx|
+      pattern = digits[digit]
+      pattern.each_with_index do |row, dy|
+        3.times do |bit|
+          if row & (1 << (2 - bit)) != 0
+            px, py = dx + bit, y + dy
+            img.set_pixel(py, px, 255, 255, 255) if px < 64 && py < 64
+          end
+        end
+      end
+    end
+  end
+
+  def generate_particles
+    cx, cy = rand(20..44), rand(10..30)
+    color = [[255, 100, 100], [100, 255, 100], [100, 100, 255], [255, 255, 100], [255, 100, 255]].sample
+
+    50.times.map do
+      angle = rand * Math::PI * 2
+      speed = rand * 2 + 1
+      {
+        x: cx.to_f,
+        y: cy.to_f,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        life: rand(20..40),
+        max_life: 40,
+        color: color
+      }
+    end
+  end
+
+  def update_particles
+    @particles.each do |p|
+      p[:x] += p[:vx]
+      p[:y] += p[:vy]
+      p[:vy] += 0.1  # gravity
+      p[:vx] *= 0.98  # drag
+      p[:vy] *= 0.98
+      p[:life] -= 1
+    end
+  end
+end
+
+trap("INT") { puts "\nStopped."; exit }
+
+FPSTest.new.run
